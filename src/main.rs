@@ -4,20 +4,46 @@ use std::process::Stdio;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::primitives::ByteStream;
 use chrono::Utc;
-use color_eyre::eyre::Result;
-use flate2::{write::GzEncoder, Compression};
+use color_eyre::eyre::{eyre, Context, Result};
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use tokio::process::Command;
 use tokio_postgres::{Client, NoTls};
 use tracing::level_filters::LevelFilter;
 use tracing_error::ErrorLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
+
+#[track_caller]
+fn get_env_var(key: &str) -> Result<String> {
+    std::env::var(key).wrap_err_with(|| eyre!("failed to get environment variable with key {key}"))
+}
 
 struct DatabaseConfig {
-    user: String,
+    username: String,
     password: Option<String>,
     database: String,
     host: String,
     port: u16,
+}
+
+impl DatabaseConfig {
+    fn from_env() -> Result<Self> {
+        let username = get_env_var("USERNAME")?;
+        let password = get_env_var("PASSWORD").ok();
+        let database = get_env_var("ROOT_DATABASE")?;
+        let host = get_env_var("DATABASE_HOST")?;
+        let port = get_env_var("DATABASE_PORT")?.parse()?;
+
+        Ok(Self {
+            username,
+            password,
+            database,
+            host,
+            port,
+        })
+    }
 }
 
 impl From<&DatabaseConfig> for tokio_postgres::Config {
@@ -25,7 +51,7 @@ impl From<&DatabaseConfig> for tokio_postgres::Config {
         let mut config = tokio_postgres::Config::new();
 
         config
-            .user(value.user.clone())
+            .user(value.username.clone())
             .dbname(value.database.clone())
             .host(value.host.clone())
             .port(value.port);
@@ -71,7 +97,7 @@ async fn get_dump_for_database(config: &DatabaseConfig, database: &str) -> Resul
             "-d",
             database,
             "-U",
-            &config.user,
+            &config.username,
         ])
         .stdout(Stdio::piped());
 
@@ -121,21 +147,14 @@ async fn main() -> Result<()> {
     let now = Utc::now();
     let date = now.format("%Y-%m-%d");
 
-    let span = tracing::info_span!("backups", %date);
+    let span = tracing::info_span!("main", %date);
     let _guard = span.enter();
 
     let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let s3_client = aws_sdk_s3::Client::new(&sdk_config);
-    let bucket = std::env::var("S3_BUCKET")?;
+    let bucket = get_env_var("S3_BUCKET")?;
 
-    let config = DatabaseConfig {
-        user: "alex".to_owned(),
-        database: "postgres".to_owned(),
-        host: "localhost".to_owned(),
-        port: 5432,
-        password: None,
-    };
-
+    let config = DatabaseConfig::from_env()?;
     let (client, connection) = tokio_postgres::Config::from(&config).connect(NoTls).await?;
 
     tokio::spawn(async move {
