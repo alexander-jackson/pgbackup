@@ -1,12 +1,9 @@
-use std::io::Write;
 use std::process::Stdio;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::primitives::ByteStream;
 use chrono::Utc;
-use color_eyre::eyre::{eyre, Context, Result};
-use flate2::write::GzEncoder;
-use flate2::Compression;
+use color_eyre::eyre::Result;
 use tokio::process::Command;
 use tokio_postgres::{Client, NoTls};
 use tracing::level_filters::LevelFilter;
@@ -15,54 +12,11 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-#[track_caller]
-fn get_env_var(key: &str) -> Result<String> {
-    std::env::var(key).wrap_err_with(|| eyre!("failed to get environment variable with key {key}"))
-}
+mod config;
+mod utils;
 
-struct DatabaseConfig {
-    username: String,
-    password: Option<String>,
-    database: String,
-    host: String,
-    port: u16,
-}
-
-impl DatabaseConfig {
-    fn from_env() -> Result<Self> {
-        let username = get_env_var("USERNAME")?;
-        let password = get_env_var("PASSWORD").ok();
-        let database = get_env_var("ROOT_DATABASE")?;
-        let host = get_env_var("DATABASE_HOST")?;
-        let port = get_env_var("DATABASE_PORT")?.parse()?;
-
-        Ok(Self {
-            username,
-            password,
-            database,
-            host,
-            port,
-        })
-    }
-}
-
-impl From<&DatabaseConfig> for tokio_postgres::Config {
-    fn from(value: &DatabaseConfig) -> Self {
-        let mut config = tokio_postgres::Config::new();
-
-        config
-            .user(value.username.clone())
-            .dbname(value.database.clone())
-            .host(value.host.clone())
-            .port(value.port);
-
-        if let Some(password) = value.password.as_deref() {
-            config.password(password.to_owned());
-        }
-
-        config
-    }
-}
+use crate::config::DatabaseConfig;
+use crate::utils::{compress, get_env_var};
 
 #[tracing::instrument(skip(client))]
 async fn discover_databases(client: &Client) -> Result<Vec<String>> {
@@ -113,23 +67,7 @@ async fn get_dump_for_database(config: &DatabaseConfig, database: &str) -> Resul
     Ok(stdout)
 }
 
-#[tracing::instrument(skip(content))]
-fn compress(content: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(content)?;
-    let compressed = encoder.finish()?;
-
-    tracing::info!(
-        input_size = %content.len(),
-        output_size = %compressed.len(),
-        "compressed some data using gzip"
-    );
-
-    Ok(compressed)
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+fn setup() -> Result<()> {
     color_eyre::install()?;
 
     let fmt_layer = tracing_subscriber::fmt::layer();
@@ -143,6 +81,13 @@ async fn main() -> Result<()> {
         .with(error_layer)
         .with(env_filter_layer)
         .init();
+
+    Ok(())
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
+    setup()?;
 
     let now = Utc::now();
     let date = now.format("%Y-%m-%d");
