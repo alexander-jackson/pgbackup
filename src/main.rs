@@ -1,6 +1,10 @@
+use std::io::Write;
 use std::process::Stdio;
 
+use aws_config::BehaviorVersion;
+use aws_sdk_s3::primitives::ByteStream;
 use color_eyre::eyre::Result;
+use flate2::{write::GzEncoder, Compression};
 use tokio::process::Command;
 use tokio_postgres::{Client, NoTls};
 use tracing::level_filters::LevelFilter;
@@ -53,7 +57,7 @@ async fn discover_databases(client: &Client) -> Result<Vec<String>> {
 }
 
 #[tracing::instrument(skip(config))]
-async fn backup_database(config: &DatabaseConfig, database: &str) -> Result<()> {
+async fn get_dump_for_database(config: &DatabaseConfig, database: &str) -> Result<Vec<u8>> {
     let mut command = Command::new("pg_dump");
 
     command
@@ -74,10 +78,26 @@ async fn backup_database(config: &DatabaseConfig, database: &str) -> Result<()> 
     }
 
     let output = command.spawn()?.wait_with_output().await?;
+    let stdout = output.stdout;
 
-    tracing::info!(bytes = %output.stdout.len(), "got some output from the dump");
+    tracing::info!(bytes = %stdout.len(), "got some output from the dump");
 
-    Ok(())
+    Ok(stdout)
+}
+
+#[tracing::instrument(skip(content))]
+fn compress(content: &[u8]) -> Result<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(content)?;
+    let compressed = encoder.finish()?;
+
+    tracing::info!(
+        input_size = %content.len(),
+        output_size = %compressed.len(),
+        "compressed some data using gzip"
+    );
+
+    Ok(compressed)
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -90,6 +110,10 @@ async fn main() -> Result<()> {
                 .from_env()?,
         )
         .init();
+
+    let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+    let s3_client = aws_sdk_s3::Client::new(&sdk_config);
+    let bucket = std::env::var("S3_BUCKET")?;
 
     let config = DatabaseConfig {
         user: "alex".to_owned(),
@@ -110,7 +134,22 @@ async fn main() -> Result<()> {
     let databases = discover_databases(&client).await?;
 
     for database in databases {
-        backup_database(&config, &database).await?;
+        if database != "tasks" {
+            continue;
+        }
+
+        let dump = get_dump_for_database(&config, &database).await?;
+        let compressed = compress(&dump)?;
+
+        let key = format!("{database}/{database}.2024-09-07.sql.gz");
+
+        s3_client
+            .put_object()
+            .bucket(&bucket)
+            .key(&key)
+            .body(ByteStream::from(compressed))
+            .send()
+            .await?;
     }
 
     Ok(())
