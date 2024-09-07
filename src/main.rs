@@ -9,7 +9,8 @@ use flate2::{write::GzEncoder, Compression};
 use tokio::process::Command;
 use tokio_postgres::{Client, NoTls};
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::EnvFilter;
+use tracing_error::ErrorLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 struct DatabaseConfig {
     user: String,
@@ -104,12 +105,17 @@ fn compress(content: &[u8]) -> Result<Vec<u8>> {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     color_eyre::install()?;
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env()?,
-        )
+
+    let fmt_layer = tracing_subscriber::fmt::layer();
+    let error_layer = ErrorLayer::default();
+    let env_filter_layer = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env()?;
+
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(error_layer)
+        .with(env_filter_layer)
         .init();
 
     let now = Utc::now();
