@@ -3,6 +3,7 @@ use std::process::Stdio;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::primitives::ByteStream;
+use chrono::Utc;
 use color_eyre::eyre::Result;
 use flate2::{write::GzEncoder, Compression};
 use tokio::process::Command;
@@ -111,6 +112,12 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    let now = Utc::now();
+    let date = now.format("%Y-%m-%d");
+
+    let span = tracing::info_span!("backups", %date);
+    let _guard = span.enter();
+
     let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let s3_client = aws_sdk_s3::Client::new(&sdk_config);
     let bucket = std::env::var("S3_BUCKET")?;
@@ -141,7 +148,7 @@ async fn main() -> Result<()> {
         let dump = get_dump_for_database(&config, &database).await?;
         let compressed = compress(&dump)?;
 
-        let key = format!("{database}/{database}.2024-09-07.sql.gz");
+        let key = format!("{database}/{database}.{date}.sql.gz");
 
         s3_client
             .put_object()
@@ -150,6 +157,8 @@ async fn main() -> Result<()> {
             .body(ByteStream::from(compressed))
             .send()
             .await?;
+
+        tracing::info!(%bucket, %key, "persisted a backup to S3");
     }
 
     Ok(())
