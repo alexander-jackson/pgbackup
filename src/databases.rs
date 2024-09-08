@@ -1,6 +1,6 @@
 use std::process::Stdio;
 
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{eyre, Context, Result};
 use tokio::process::Command;
 use tokio_postgres::Client;
 
@@ -47,8 +47,12 @@ pub async fn dump(config: &DatabaseConfig, database: &str) -> Result<Vec<u8>> {
         command.env("PGPASSWORD", password);
     }
 
-    let output = command.spawn()?.wait_with_output().await?;
-    let stdout = output.stdout;
+    let stdout = command
+        .spawn()
+        .wrap_err_with(|| eyre!("failed to run `pg_dump` command"))?
+        .wait_with_output()
+        .await?
+        .stdout;
 
     tracing::info!(bytes = %stdout.len(), "got some output from the dump");
 
