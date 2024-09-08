@@ -39,7 +39,7 @@ impl From<&DatabaseConfig> for tokio_postgres::Config {
             .port(value.port);
 
         if let Some(password) = value.password.as_deref() {
-            config.password(password.to_owned());
+            config.password(password);
         }
 
         config

@@ -31,7 +31,7 @@ pub async fn dump(config: &DatabaseConfig, database: &str) -> Result<Vec<u8>> {
     let mut command = Command::new("pg_dump");
 
     command
-        .args(&[
+        .args([
             "-h",
             &config.host,
             "-p",
