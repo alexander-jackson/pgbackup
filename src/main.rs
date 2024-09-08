@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::primitives::ByteStream;
 use chrono::Utc;
@@ -39,43 +41,45 @@ fn setup() -> Result<()> {
 async fn main() -> Result<()> {
     setup()?;
 
-    let now = Utc::now();
-    let date = now.format("%Y-%m-%d");
-
-    let span = tracing::info_span!("main", %date);
-    let _guard = span.enter();
-
     let sdk_config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let s3_client = aws_sdk_s3::Client::new(&sdk_config);
     let bucket = get_env_var("S3_BUCKET")?;
 
-    let config = DatabaseConfig::from_env()?;
-    let (client, connection) = tokio_postgres::Config::from(&config).connect(NoTls).await?;
+    loop {
+        let now = Utc::now();
+        let date = now.format("%Y-%m-%d");
 
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
+        let span = tracing::info_span!("main", %date);
+        let _guard = span.enter();
+
+        let config = DatabaseConfig::from_env()?;
+        let (client, connection) = tokio_postgres::Config::from(&config).connect(NoTls).await?;
+
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+
+        let databases = discover(&client).await?;
+
+        for database in databases {
+            let dump = dump(&config, &database).await?;
+            let compressed = compress(&dump)?;
+
+            let key = format!("{database}/{database}.{date}.sql.gz");
+
+            s3_client
+                .put_object()
+                .bucket(&bucket)
+                .key(&key)
+                .body(ByteStream::from(compressed))
+                .send()
+                .await?;
+
+            tracing::info!(%bucket, %key, "persisted a backup to S3");
         }
-    });
 
-    let databases = discover(&client).await?;
-
-    for database in databases {
-        let dump = dump(&config, &database).await?;
-        let compressed = compress(&dump)?;
-
-        let key = format!("{database}/{database}.{date}.sql.gz");
-
-        s3_client
-            .put_object()
-            .bucket(&bucket)
-            .key(&key)
-            .body(ByteStream::from(compressed))
-            .send()
-            .await?;
-
-        tracing::info!(%bucket, %key, "persisted a backup to S3");
+        tokio::time::sleep(Duration::from_secs(60 * 60 * 24)).await;
     }
-
-    Ok(())
 }
