@@ -22,3 +22,6 @@ jobs:
         with:
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/pgbackup:${{ steps.tag.outputs.value }}
+      - name: Inform `tag-updater`
+        run: |
+          curl https://tags.opentracker.app/update -X PUT -H "Content-Type: application/json" -H "Authorization: Bearer ${{ secrets.TAG_UPDATER_PASSPHRASE }}" --data '{"service": "pgbackup", "tag": "${{ steps.tag.outputs.value }}"}'
