@@ -2,14 +2,16 @@ use std::time::Duration;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::primitives::ByteStream;
-use chrono::Utc;
+use chrono::{NaiveTime, Utc};
 use color_eyre::eyre::Result;
+use tokio::time::Instant;
 use tokio_postgres::NoTls;
 use tracing::level_filters::LevelFilter;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+use utils::get_initial_offset;
 
 mod config;
 mod databases;
@@ -45,9 +47,19 @@ async fn main() -> Result<()> {
     let s3_client = aws_sdk_s3::Client::new(&sdk_config);
     let bucket = get_env_var("S3_BUCKET")?;
 
+    let schedule_time = NaiveTime::from_hms_opt(22, 30, 0).unwrap();
+    let offset = get_initial_offset(Utc::now().time(), schedule_time);
+
+    tracing::info!(?offset, %schedule_time, "waiting some time before running the first backups");
+
+    let start = Instant::now() + offset;
+    let period = Duration::from_secs(60 * 60 * 24);
+    let mut interval = tokio::time::interval_at(start, period);
+
     loop {
-        let now = Utc::now();
-        let date = now.format("%Y-%m-%d");
+        interval.tick().await;
+
+        let date = Utc::now().format("%Y-%m-%d");
 
         let span = tracing::info_span!("main", %date);
         let _guard = span.enter();
@@ -79,7 +91,5 @@ async fn main() -> Result<()> {
 
             tracing::info!(%bucket, %key, "persisted a backup to S3");
         }
-
-        tokio::time::sleep(Duration::from_secs(60 * 60 * 24)).await;
     }
 }
