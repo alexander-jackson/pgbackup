@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::time::Duration;
 
 use aws_config::BehaviorVersion;
@@ -47,7 +48,7 @@ async fn main() -> Result<()> {
     let s3_client = aws_sdk_s3::Client::new(&sdk_config);
     let bucket = get_env_var("S3_BUCKET")?;
 
-    let schedule_time = NaiveTime::from_hms_opt(22, 30, 0).unwrap();
+    let schedule_time = NaiveTime::from_str(get_env_var("BACKUP_TIME")?.as_str())?;
     let offset = get_initial_offset(Utc::now().time(), schedule_time);
 
     tracing::info!(?offset, %schedule_time, "waiting some time before running the first backups");
