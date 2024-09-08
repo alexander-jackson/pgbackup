@@ -61,10 +61,6 @@ async fn main() -> Result<()> {
     let databases = discover(&client).await?;
 
     for database in databases {
-        if database != "tasks" {
-            continue;
-        }
-
         let dump = dump(&config, &database).await?;
         let compressed = compress(&dump)?;
 
