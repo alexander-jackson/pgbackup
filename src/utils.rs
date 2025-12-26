@@ -18,9 +18,11 @@ pub fn compress(content: &[u8]) -> Result<Vec<u8>> {
     encoder.write_all(content)?;
     let compressed = encoder.finish()?;
 
+    let formatter = humansize::make_format(humansize::BINARY);
+
     tracing::info!(
-        input_size = %content.len(),
-        output_size = %compressed.len(),
+        input_size = formatter(content.len()),
+        output_size = formatter(compressed.len()),
         "compressed some data using gzip"
     );
 
